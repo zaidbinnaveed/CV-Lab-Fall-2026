@@ -1,3 +1,9 @@
+def task9_stadium_panorama(img1, img2, pts_img1, pts_img2):
+    """
+    Given 4 matching points found in both camera images, compute the
+    Homography matrix that projects the second camera's view into the
+    first camera's coordinate space, then stitch them into one panorama.
+    """
 def compute_homography_DLT(src_pts, dst_pts):
     """
     Manually compute the Homography matrix H (3x3, up to scale) that maps
