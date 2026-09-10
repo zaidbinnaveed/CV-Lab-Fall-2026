@@ -1,42 +1,52 @@
-def task9_stadium_panorama(img1, img2, pts_img1, pts_img2):
+def task10_insert_painting(painting_img, frame_corners, canvas_size):
     """
-    Given 4 matching points found in both camera images, compute the
-    Homography matrix that projects the second camera's view into the
-    first camera's coordinate space, then stitch them into one panorama.
+    Traverse the FULL transformation hierarchy to insert a flat painting
+    into an angled picture frame:
+        1. Linear Scale     -> shrink the painting
+        2. Rigid Transform  -> move it near the frame (rotation + translation)
+        3. Projective Warp  -> map its 4 corners exactly onto the angled
+                                frame's 4 corners in the final scene
     """
-    H = compute_homography_DLT(pts_img2, pts_img1)  # img2 -> img1 space
+    h, w = painting_img.shape[:2]
 
-    h1, w1 = img1.shape[:2]
-    h2, w2 = img2.shape[:2]
-
-    # Determine output canvas size by projecting img2's corners through H
-    corners2 = np.array([[0, 0], [w2, 0], [w2, h2], [0, h2]], dtype=np.float64)
-    corners2_h = np.hstack([corners2, np.ones((4, 1))])
-    proj = (H @ corners2_h.T).T
-    proj = proj[:, :2] / proj[:, 2:3]
-
-    all_corners = np.vstack([
-        proj,
-        [[0, 0], [w1, 0], [w1, h1], [0, h1]]
-    ])
-    x_min, y_min = np.floor(all_corners.min(axis=0)).astype(int)
-    x_max, y_max = np.ceil(all_corners.max(axis=0)).astype(int)
-
-    # Shift everything so nothing is negative
-    shift = np.array([
-        [1, 0, -x_min],
-        [0, 1, -y_min],
-        [0, 0, 1]
+    # --- Step 1: Linear Scale (shrink painting) ---
+    scale = 0.5
+    Scale2x2 = np.array([
+        [scale, 0.0],
+        [0.0,   scale]
     ], dtype=np.float64)
+    new_w, new_h = int(w * scale), int(h * scale)
+    M_scale = np.array([
+        [Scale2x2[0, 0], Scale2x2[0, 1], 0],
+        [Scale2x2[1, 0], Scale2x2[1, 1], 0]
+    ], dtype=np.float64)
+    scaled = cv2.warpAffine(painting_img, M_scale, (new_w, new_h))
 
-    canvas_size = (x_max - x_min, y_max - y_min)
+    # --- Step 2: Rigid Transform (rotate slightly + move near frame) ---
+    angle_deg = 5.0
+    theta = np.deg2rad(angle_deg)
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    tx, ty = 20, 15  # nudge toward the frame's approximate position
+    Rigid = np.array([
+        [cos_t, -sin_t, tx],
+        [sin_t,  cos_t, ty],
+        [0.0,    0.0,   1.0]
+    ], dtype=np.float64)
+    M_rigid = Rigid[:2, :]
+    positioned = cv2.warpAffine(scaled, M_rigid, (new_w + 60, new_h + 60))
 
-    warped2 = cv2.warpPerspective(img2, shift @ H, canvas_size)
-    warped1 = cv2.warpPerspective(img1, shift, canvas_size)
+    # --- Step 3: Projective Transform (warp 4 corners onto angled frame) ---
+    ph, pw = positioned.shape[:2]
+    src_corners = np.array([
+        [0, 0], [pw - 1, 0], [pw - 1, ph - 1], [0, ph - 1]
+    ], dtype=np.float64)
+    dst_corners = np.array(frame_corners, dtype=np.float64)  # angled frame's 4 corners
 
-    # Simple stitch: paste img1 on top, then fill remaining area with img2
-    panorama = warped2.copy()
-    mask1 = np.any(warped1 > 0, axis=-1)
-    panorama[mask1] = warped1[mask1]
+    H = compute_homography_DLT(src_corners, dst_corners)
+    warped_painting = cv2.warpPerspective(positioned, H, canvas_size)
 
-    return panorama, H
+    # Build a mask of the warped painting so we can composite it onto the wall
+    mask = cv2.warpPerspective(
+        np.ones((ph, pw), dtype=np.uint8) * 255, H, canvas_size
+    )
+    return warped_painting, mask, (Scale2x2, Rigid, H)
